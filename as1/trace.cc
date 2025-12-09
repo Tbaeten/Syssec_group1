@@ -1,4 +1,4 @@
-#include <print>
+#include <iostream>
 #include <cstdint>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
@@ -9,7 +9,7 @@ using namespace std::chrono_literals;
 
 int32_t main(int argv, char** argc) {
 	if(argv < 2) {
-		std::println(stderr, "usage: ./trace [bin]");
+		std::cerr << "usage: ./trace [bin]\n";
 		return 1;
 	}
 
@@ -17,21 +17,22 @@ int32_t main(int argv, char** argc) {
 
 	switch(pid) {
 		case -1:
-			std::println(stderr, "failed to fork");
+			std::cerr << "failed to fork\n";
 			return 1;
 		case 0: {
-			std::println("child");
+			std::cout << "child\n";
 			std::this_thread::sleep_for(1000ms);
 
-			ptrace(PTRACE_TRACEME);
+			auto ret = ptrace(PTRACE_TRACEME);
+			std::cout << "traceme returned: " << ret << '\n';
 
-			int ret = execv(argc[1], {});
-			std::println("execve returned: {}", ret);
+			ret = execv(argc[1], {});
+			std::cout << "execve returned: " << ret << '\n';
 
 			break;
 		}
 		default: {
-			std::println("parent, child pid: {}", pid);
+			std::cout << "parent, child pid: " << pid << '\n';
 			std::this_thread::sleep_for(200ms);
 
 			// auto ret = ptrace(PTRACE_SEIZE, pid);
@@ -39,12 +40,14 @@ int32_t main(int argv, char** argc) {
 
 			int status = 0;
 
-			// while(waitpid(pid, &status, __WALL) != -1);
+			while(waitpid(pid, &status, __WALL) != -1);
 			// std::println("status: {}", status);
-
+			
+			ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD);
+			
 			siginfo_t siginfo;
-			ptrace(PTRACE_GETSIGINFO, pid, 0, &siginfo);
-			std::println("siginfo: {}", siginfo.si_code);
+			ptrace(PTRACE_GET_SYSCALL_INFO, pid, sizeof(siginfo), &siginfo);
+			std::cout << "siginfo: " << siginfo.si_code << '\n';
 
 			break;
 		}
