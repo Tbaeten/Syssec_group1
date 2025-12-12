@@ -1,8 +1,0 @@
-trace: trace.cc
-	g++ -Wall -Wextra -pedantic -std=c++23 -o trace trace.cc
-
-example: example.s
-	gcc -m64 -nostdlib -no-pie -o example example.s
-
-clean:
-	rm trace
