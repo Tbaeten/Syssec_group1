@@ -23,8 +23,8 @@ inline void log_parent(const std::string &msg) {
 #endif
 }
 
-int32_t main(int argv, char** argc) {
-	if(argv < 3) {
+int32_t main(int argc, char** argv) {
+	if(argc < 3) {
 		std::cerr << "usage: ./trace [policy_file_path] [bin]\n";
 		return 1;
 	}
@@ -37,6 +37,10 @@ int32_t main(int argv, char** argc) {
 			return 1;
 		case 0: {
 			log_child("up");
+			
+			char** args = new char*[argc-2];
+			for(int i=2; i<argc; ++i)
+				args[i-2] = argv[i];
 
 			auto ret = ptrace(PTRACE_TRACEME);
 			// log_child("traceme returned: " + std::to_string(ret));
@@ -44,14 +48,14 @@ int32_t main(int argv, char** argc) {
 			// kill(getpid(), SIGSTOP);
 			
 			// log_child("starting execve");
-			ret = execv(argc[2], {});
+			ret = execv(argv[2], args);
 			// log_child("execve returned: " + std::to_string(ret));
 
 			log_child("down");
 			break;
 		}
 		default: {
-			std::ofstream out(argc[1]);
+			std::ofstream out(argv[1]);
 			std::vector<long> res;
 
 			log_parent("child pid: " + std::to_string(pid));
