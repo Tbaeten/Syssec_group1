@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <csignal>
 #include <iostream>
 #include <cstdint>
@@ -7,34 +8,8 @@
 #include <sys/wait.h>
 #include <sys/reg.h>
 #include <unistd.h>
-
-// copied from `man ptrace`
-struct ptrace_syscall_info {
-  __u8 op;        /* Type of system call stop */
-  __u32 arch;     /* AUDIT_ARCH_* value; see seccomp(2) */
-  __u64 instruction_pointer; /* CPU instruction pointer */
-  __u64 stack_pointer;    /* CPU stack pointer */
-  union {
-	  struct {    /* op == PTRACE_SYSCALL_INFO_ENTRY */
-		  __u64 nr;       /* System call number */
-		  __u64 args[6];  /* System call arguments */
-	  } entry;
-	  struct {    /* op == PTRACE_SYSCALL_INFO_EXIT */
-		  __s64 rval;     /* System call return value */
-		  __u8 is_error;  /* System call error flag;
-							 Boolean: does rval contain
-							 an error value (-ERRCODE) or
-							 a nonerror return value? */
-	  } exit;
-	  struct {    /* op == PTRACE_SYSCALL_INFO_SECCOMP */
-		  __u64 nr;       /* System call number */
-		  __u64 args[6];  /* System call arguments */
-		  __u32 ret_data; /* SECCOMP_RET_DATA portion
-							 of SECCOMP_RET_TRACE
-							 return value */
-	  } seccomp;
-  };
-};
+#include <vector>
+#include <fstream>
 
 inline void log_child(const std::string &msg) {
 #ifdef DEBUG
@@ -49,8 +24,8 @@ inline void log_parent(const std::string &msg) {
 }
 
 int32_t main(int argv, char** argc) {
-	if(argv < 2) {
-		std::cerr << "usage: ./trace [bin]\n";
+	if(argv < 3) {
+		std::cerr << "usage: ./trace [policy_file_path] [bin]\n";
 		return 1;
 	}
 
@@ -69,13 +44,16 @@ int32_t main(int argv, char** argc) {
 			// kill(getpid(), SIGSTOP);
 			
 			// log_child("starting execve");
-			ret = execv(argc[1], {});
+			ret = execv(argc[2], {});
 			// log_child("execve returned: " + std::to_string(ret));
 
 			log_child("down");
 			break;
 		}
 		default: {
+			std::ofstream out(argc[1]);
+			std::vector<long> res;
+
 			log_parent("child pid: " + std::to_string(pid));
 
 			int status;
@@ -84,6 +62,7 @@ int32_t main(int argv, char** argc) {
 			
 			int e = ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD);
 			
+			bool ok = true;
 			while(true) {
 				while(true) {
 					int e = ptrace(PTRACE_SYSCALL, pid, 0, 0);
@@ -97,12 +76,18 @@ int32_t main(int argv, char** argc) {
 						break;
 					}
 
-					if (WIFEXITED(status))
-						return 1;
+					if (WIFEXITED(status)) {
+						ok = false;
+						break;
+					}
 				}
+
+				if(!ok)
+					break;
 
 				// ptrace_syscall_info call;
 				long call = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * ORIG_RAX);
+				res.push_back(call);
 				// ptrace(PTRACE_GET_SYSCALL_INFO, pid, 0, &call);
 				// log_parent(std::to_string(call.instruction_pointer));
 				// log_parent(std::to_string(call.entry.nr));
@@ -110,6 +95,13 @@ int32_t main(int argv, char** argc) {
 				std::cout << "called: " << call << '\n';
 				// ptrace(PTRACE_CONT, pid);
 			}
+
+			std::sort(res.begin(), res.end());
+			res.erase(std::unique(res.begin(), res.end()), res.end());
+
+			out << res.size() << std::endl;
+			for(auto c : res)
+				out << c << std::endl;
 			
 			log_parent("down");
 			break;
