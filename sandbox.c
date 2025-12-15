@@ -36,6 +36,8 @@ __asm__(
 );
 
 int policy_arr[512] = {0};
+static volatile char selector = SYSCALL_DISPATCH_FILTER_BLOCK; // start in "intercept" mode
+
 
 // 1. The Trampoline
 // This global variable allows us to identify the memory range of this function
@@ -63,39 +65,40 @@ int is_syscall_allowed(int syscall_nr) {
 void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
     greg_t *regs = uc->uc_mcontext.gregs;
-    // Get the syscall number (RAX holds the syscall number on x86_64)
     int syscall_nr = (int)regs[REG_RAX];
-    
-    if (!is_syscall_allowed(syscall_nr)) {
-        const char *msg = "Sandbox violation detected!\n";
-        // write(STDOUT_FILENO, msg, 28);
-        exit(1);
-    }
-    greg_t return_addr = regs[REG_RIP] + 2;
-    // Calculates where to return which is 2 bytes from the syscall
-    greg_t new_rsp = regs[REG_RSP] - 8;
-    greg_t *stack_ptr = (greg_t *)new_rsp;  // Cast to pointer
-    *stack_ptr = return_addr;                // Now write through the pointer
-    regs[REG_RSP] = new_rsp;
 
-    // Hijacks instruction pointer to execute trampoline 
+    if (!is_syscall_allowed(syscall_nr)) {
+        selector = SYSCALL_DISPATCH_FILTER_ALLOW;  // allow libc to write/exit safely
+        write(STDERR_FILENO, "Sandbox violation detected!\n", 28);
+        _exit(1);
+    }
+
+    greg_t return_addr = regs[REG_RIP] + 2;
+    regs[REG_RSP] -= 8;
+    *(uintptr_t *)regs[REG_RSP] = return_addr;
     regs[REG_RIP] = (greg_t)&syscall_trampoline;
 }
+
+
 
 // 4. The Setup
 __attribute__((constructor))
 void init_sandbox() {
     // A. Load Policy File ...
-    FILE *policy_file;
-    policy_file = fopen("policy.txt", "r");
-    //write(STDOUT_FILENO, "loading", 7);
-    int i;
-    while (fscanf(policy_file, "%d", &i) == 1) {  // Check return value
-        if (i >= 0 && i < 512) {
-            policy_arr[i] = 1;
-        }
+    FILE *policy_file = fopen("policy.txt", "r");
+    if (!policy_file) {
+        perror("policy");
+        _exit(1);
+    }
+
+    int sc;
+    while (fscanf(policy_file, "%d", &sc) == 1) {
+        if (sc >= 0 && sc < 512)
+            policy_arr[sc] = 1;
     }
     fclose(policy_file);
+
+
     // B. Setup Signal Handler
     struct sigaction sa = {0};
     sa.sa_sigaction = sigsys_handler;
@@ -120,13 +123,12 @@ void init_sandbox() {
     // Using INCLUSIVE mode:
     // - Syscalls FROM the trampoline region are allowed (bypass filter)
     // - Syscalls from everywhere else trigger SIGSYS (get intercepted)
-    char selector = SYSCALL_DISPATCH_FILTER_ALLOW;
     
      if (prctl(PR_SET_SYSCALL_USER_DISPATCH, 
-              PR_SYS_DISPATCH_INCLUSIVE_ON,  // Use INCLUSIVE mode
+              PR_SYS_DISPATCH_ON,  // Use INCLUSIVE mode
               (unsigned long)start, 
-              (unsigned long)len, 
-              &selector) < 0) {
+              (unsigned long)64, 
+              (void *)&selector) < 0) {
         perror("prctl failed");
         exit(1);
     }

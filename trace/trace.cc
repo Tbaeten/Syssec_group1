@@ -45,7 +45,8 @@ int32_t main(int argc, char** argv) {
 			auto ret = ptrace(PTRACE_TRACEME);
 			// log_child("traceme returned: " + std::to_string(ret));
 			
-			// kill(getpid(), SIGSTOP);
+			kill(getpid(), SIGSTOP);
+			execv(argv[2], args);
 			
 			// log_child("starting execve");
 			ret = execv(argv[2], args);
@@ -103,9 +104,8 @@ int32_t main(int argc, char** argv) {
 			std::sort(res.begin(), res.end());
 			res.erase(std::unique(res.begin(), res.end()), res.end());
 
-			out << res.size() << std::endl;
-			for(auto c : res)
-				out << c << std::endl;
+			for (auto c : res)
+    			out << c << "\n";
 			
 			log_parent("down");
 			break;
