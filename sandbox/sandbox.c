@@ -24,7 +24,7 @@ volatile char selector = SYSCALL_DISPATCH_FILTER_ALLOW;
 void *trampoline_page = NULL;
 int handler_count = 0;
 
-// Safe debug write function
+// Safe debug write function for debugging, mostly unused in final code
 void debug_write(const char *msg) {
     write(STDERR_FILENO, msg, strlen(msg));
 }
@@ -51,12 +51,9 @@ int is_syscall_allowed(int syscall_nr) {
 void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     handler_count++;
     
-    // CRITICAL: Set selector to ALLOW immediately to prevent recursion
+    // Set selector to ALLOW immediately to prevent recursion, otherwise syscall 15 keeps getting called
     selector = SYSCALL_DISPATCH_FILTER_ALLOW;
     
-    debug_write("\n=== SIGSYS Handler Called ===\n");
-    debug_write_num("Handler call #", handler_count);
-    debug_write_num("Signal: ", sig);
     
     if (!ctx) {
         debug_write("ERROR: Context is NULL!\n");
@@ -67,20 +64,10 @@ void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     greg_t *regs = uc->uc_mcontext.gregs;
     int syscall_nr = (int)regs[REG_RAX];
     
-    debug_write_num("Syscall number: ", syscall_nr);
-    debug_write_hex("RIP: ", (void*)regs[REG_RIP]);
-    debug_write_hex("RSP: ", (void*)regs[REG_RSP]);
+    debug_write_num("Syscall number: ", syscall_nr); // just debug to check which call is happening
     
-    // Check if we're being called recursively
-    if (handler_count > 10) {
-        debug_write("ERROR: Too many recursive handler calls! Aborting.\n");
-        selector = SYSCALL_DISPATCH_FILTER_ALLOW;
-        _exit(1);
-    }
-    
-    // Don't intercept rt_sigreturn
+    // Don't intercept rt_sigreturn, or it will just end in recursion
     if (syscall_nr == 15) {
-        debug_write("rt_sigreturn detected - allowing directly\n");
         selector = SYSCALL_DISPATCH_FILTER_BLOCK;
         return;
     }
@@ -98,7 +85,6 @@ void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     
     // Check policy
     int allowed = is_syscall_allowed(syscall_nr);
-    debug_write_num("Policy check result: ", allowed);
     
     if (!allowed) {
         char buf[100];
@@ -108,25 +94,16 @@ void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
         _exit(1);
     }
     
-    debug_write("Syscall allowed - redirecting to trampoline\n");
-    
-    // RIP already points past the syscall instruction
     greg_t return_addr = regs[REG_RIP];
-    debug_write_hex("Return address: ", (void*)return_addr);
     
     // Modify stack to set up return
     regs[REG_RSP] -= 8;
     uint64_t *stack_ptr = (uint64_t *)regs[REG_RSP];
     *stack_ptr = return_addr;
-    debug_write("Return address pushed to stack\n");
     
     // Jump to trampoline
     regs[REG_RIP] = (greg_t)trampoline_page;
-    debug_write_hex("New RIP (trampoline): ", (void*)regs[REG_RIP]);
     
-    // Selector stays ALLOW - trampoline will reset it to BLOCK
-    
-    debug_write("=== Handler Exiting ===\n\n");
 }
 
 __attribute__((constructor))
@@ -140,13 +117,6 @@ void init_sandbox() {
         perror("mmap failed");
         _exit(1);
     }
-    
-    debug_write_hex("Trampoline page allocated at: ", trampoline_page);
-    
-    // Write trampoline code that:
-    // 1. Executes the syscall
-    // 2. Resets selector to BLOCK
-    // 3. Returns
     
     unsigned char *code = (unsigned char *)trampoline_page;
     int offset = 0;
@@ -174,8 +144,6 @@ void init_sandbox() {
     // ret instruction
     code[offset++] = 0xc3;
     
-    debug_write("Trampoline code written\n");
-    debug_write_num("Trampoline size: ", offset);
     
     // Load policy
     FILE *policy_file = fopen("policy.txt", "r");
@@ -198,9 +166,11 @@ void init_sandbox() {
     policy_arr[60] = 1;  // exit
     policy_arr[231] = 1; // exit_group
     
-    debug_write_num("Total syscalls in policy: ", policy_count);
     
     // Setup signal handler with alternate stack
+    // this is done so that the main program stack doesn't overflow from multiple calls
+    // to the signal handler, not needed for a simple sandbox, but we were running into
+    // a recursion problem earlier (currently solved)
     stack_t ss;
     ss.ss_sp = mmap(NULL, SIGSTKSZ, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -215,7 +185,6 @@ void init_sandbox() {
         perror("sigaltstack failed");
         _exit(1);
     }
-    debug_write("Signal stack installed\n");
     
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -227,16 +196,12 @@ void init_sandbox() {
         perror("sigaction failed");
         _exit(1);
     }
-    debug_write("Signal handler installed\n");
     
     // Enable syscall user dispatch
     unsigned long start = (unsigned long)trampoline_page;
     unsigned long len = 4096;
     
-    debug_write_hex("Dispatch region start: ", (void*)start);
-    debug_write_num("Dispatch region length: ", len);
-    debug_write_hex("Selector address: ", (void*)&selector);
-    debug_write_num("Initial selector value: ", selector);
+    // main code that sets the SUD active
     
     if (prctl(PR_SET_SYSCALL_USER_DISPATCH,
               PR_SYS_DISPATCH_ON,
@@ -247,21 +212,13 @@ void init_sandbox() {
         debug_write_num("errno: ", errno);
         _exit(1);
     }
-    debug_write("Syscall user dispatch enabled\n");
-    
-    debug_write("Testing with selector=ALLOW...\n");
     
     // Now switch to blocking mode
     debug_write("About to set selector to BLOCK...\n");
     selector = SYSCALL_DISPATCH_FILTER_BLOCK;
-    debug_write("Selector set to BLOCK\n");
     
     // Test syscall
-    debug_write("Testing: about to call getpid()...\n");
     pid_t pid = getpid();
-    debug_write_num("getpid returned: ", pid);
-    
-    debug_write("=== Sandbox Initialization Complete ===\n\n");
 }
 
 __attribute__((destructor))
