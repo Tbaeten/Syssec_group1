@@ -15,6 +15,16 @@
 # define PR_SYS_DISPATCH_ON 1
 # define SYSCALL_DISPATCH_FILTER_ALLOW 0
 # define SYSCALL_DISPATCH_FILTER_BLOCK 1
+
+#endif
+
+
+#ifndef PR_SYS_DISPATCH_INCLUSIVE_ON
+#define PR_SYS_DISPATCH_INCLUSIVE_ON 1
+#endif
+
+#ifndef PR_SYS_DISPATCH_EXCLUSIVE_ON
+#define PR_SYS_DISPATCH_EXCLUSIVE_ON 2
 #endif
 
 //assembly definition of trampoline
@@ -24,6 +34,8 @@ __asm__(
     "    syscall\n"
     "    ret\n"
 );
+
+int policy_arr[512] = {0};
 
 // 1. The Trampoline
 // This global variable allows us to identify the memory range of this function
@@ -38,6 +50,9 @@ extern void syscall_trampoline(void);
 // 2. The Policy Checker
 int is_syscall_allowed(int syscall_nr) {
     // Check your array/list loaded from file
+    if (!policy_arr[syscall_nr]){
+        return 0;
+    }
     return 1; // or 0
 }
 
@@ -48,7 +63,7 @@ void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     
     // Get the syscall number (RAX holds the syscall number on x86_64)
     int syscall_nr = (int)regs[REG_RAX];
-
+    
     if (!is_syscall_allowed(syscall_nr)) {
         const char *msg = "Sandbox violation detected!\n";
         write(STDOUT_FILENO, msg, 28);
@@ -73,7 +88,15 @@ void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
 __attribute__((constructor))
 void init_sandbox() {
     // A. Load Policy File ...
-    
+    FILE *policy_file;
+    policy_file = fopen("example.txt", "r");
+    int i;
+    fscanf(policy_file, "%d", &i);    
+    while (!feof (policy_file)){  
+        policy_arr[i] = 1;
+        fscanf (policy_file, "%d", &i);      
+    }
+    fclose (policy_file);  
     // B. Setup Signal Handler
 
     struct sigaction sa = {0};
@@ -95,15 +118,18 @@ void init_sandbox() {
     // Note: Constants might need to be defined if headers are old
     // PR_SET_SYSCALL_USER_DISPATCH = 59
     // PR_SYS_DISPATCH_ON = 1
+    size_t len = 16; // Approximate size of trampoline code
     
-    struct syscall_user_dispatch_config config = {
-        .mode = PR_SYS_DISPATCH_ON,
-        .offset = start,
-        .len = end - start,
-        .selector = 0, // Not using selector variable mode
-    };
-
-    if (syscall(SYS_prctl, PR_SET_SYSCALL_USER_DISPATCH, &config) < 0) {
+    // Using INCLUSIVE mode:
+    // - Syscalls FROM the trampoline region are allowed (bypass filter)
+    // - Syscalls from everywhere else trigger SIGSYS (get intercepted)
+    char selector = SYSCALL_DISPATCH_FILTER_ALLOW;
+    
+     if (prctl(PR_SET_SYSCALL_USER_DISPATCH, 
+              PR_SYS_DISPATCH_INCLUSIVE_ON,  // Use INCLUSIVE mode
+              (unsigned long)start, 
+              (unsigned long)len, 
+              &selector) < 0) {
         perror("prctl failed");
         exit(1);
     }
