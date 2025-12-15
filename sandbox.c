@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <errno.h>
 
 #ifndef PR_SET_SYSCALL_USER_DISPATCH
 # define PR_SET_SYSCALL_USER_DISPATCH 59
@@ -14,6 +16,14 @@
 # define SYSCALL_DISPATCH_FILTER_ALLOW 0
 # define SYSCALL_DISPATCH_FILTER_BLOCK 1
 #endif
+
+//assembly definition of trampoline
+__asm__(
+    ".global syscall_trampoline\n"
+    "syscall_trampoline:\n"
+    "    syscall\n"
+    "    ret\n"
+);
 
 // 1. The Trampoline
 // This global variable allows us to identify the memory range of this function
