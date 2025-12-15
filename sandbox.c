@@ -50,6 +50,9 @@ extern void syscall_trampoline(void);
 // 2. The Policy Checker
 int is_syscall_allowed(int syscall_nr) {
     // Check your array/list loaded from file
+    if(syscall_nr<0 || syscall_nr>512){
+        return 0;
+    }
     if (!policy_arr[syscall_nr]){
         return 0;
     }
@@ -60,28 +63,23 @@ int is_syscall_allowed(int syscall_nr) {
 void sigsys_handler(int sig, siginfo_t *info, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
     greg_t *regs = uc->uc_mcontext.gregs;
-    
     // Get the syscall number (RAX holds the syscall number on x86_64)
     int syscall_nr = (int)regs[REG_RAX];
     
     if (!is_syscall_allowed(syscall_nr)) {
         const char *msg = "Sandbox violation detected!\n";
-        write(STDOUT_FILENO, msg, 28);
+        // write(STDOUT_FILENO, msg, 28);
         exit(1);
     }
-
-    // Calculates where to return which is 2 bytes from the syscall
     greg_t return_addr = regs[REG_RIP] + 2;
-    
-    // simulates push onto user stack which does decrement the stack pointer by 8 bytes
-    regs[REG_RSP] -= 8;
-
-    // writes the return address into the memory at new stack pointer position
-    *(uintptr_t *)regs[REG_RSP] = return_addr;
+    // Calculates where to return which is 2 bytes from the syscall
+    greg_t new_rsp = regs[REG_RSP] - 8;
+    greg_t *stack_ptr = (greg_t *)new_rsp;  // Cast to pointer
+    *stack_ptr = return_addr;                // Now write through the pointer
+    regs[REG_RSP] = new_rsp;
 
     // Hijacks instruction pointer to execute trampoline 
     regs[REG_RIP] = (greg_t)&syscall_trampoline;
-
 }
 
 // 4. The Setup
@@ -89,16 +87,16 @@ __attribute__((constructor))
 void init_sandbox() {
     // A. Load Policy File ...
     FILE *policy_file;
-    policy_file = fopen("example.txt", "r");
+    policy_file = fopen("policy.txt", "r");
+    //write(STDOUT_FILENO, "loading", 7);
     int i;
-    fscanf(policy_file, "%d", &i);    
-    while (!feof (policy_file)){  
-        policy_arr[i] = 1;
-        fscanf (policy_file, "%d", &i);      
+    while (fscanf(policy_file, "%d", &i) == 1) {  // Check return value
+        if (i >= 0 && i < 512) {
+            policy_arr[i] = 1;
+        }
     }
-    fclose (policy_file);  
+    fclose(policy_file);
     // B. Setup Signal Handler
-
     struct sigaction sa = {0};
     sa.sa_sigaction = sigsys_handler;
     // getter of context of registers (RIP)
@@ -114,7 +112,6 @@ void init_sandbox() {
     // Everything else will trigger SIGSYS.
     long start = (long)&syscall_trampoline;
     long end = start + 16; // Approximate size of trampoline code
-    
     // Note: Constants might need to be defined if headers are old
     // PR_SET_SYSCALL_USER_DISPATCH = 59
     // PR_SYS_DISPATCH_ON = 1
