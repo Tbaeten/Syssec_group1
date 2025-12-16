@@ -43,14 +43,11 @@ int32_t main(int argc, char** argv) {
 				args[i-2] = argv[i];
 
 			auto ret = ptrace(PTRACE_TRACEME);
-			// log_child("traceme returned: " + std::to_string(ret));
+			log_child("traceme returned: " + std::to_string(ret));
 			
-			kill(getpid(), SIGSTOP);
-			execv(argv[2], args);
-			
-			// log_child("starting execve");
+			log_child("starting execv");
 			ret = execv(argv[2], args);
-			// log_child("execve returned: " + std::to_string(ret));
+			log_child("execv returned: " + std::to_string(ret));
 
 			log_child("down");
 			break;
@@ -66,11 +63,12 @@ int32_t main(int argc, char** argv) {
 			log_parent("wait status: " + std::to_string(status));
 			
 			int e = ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD);
+			log_parent("setoptions returned: " + std::to_string(e));
 			
 			bool ok = true;
 			while(true) {
 				while(true) {
-					int e = ptrace(PTRACE_SYSCALL, pid, 0, 0);
+					ptrace(PTRACE_SYSCALL, pid, 0, 0);
 					
 					log_parent("waiting....");
 					int status;
