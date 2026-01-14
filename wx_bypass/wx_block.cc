@@ -24,6 +24,17 @@ inline void log_parent(const std::string &msg) {
 #endif
 }
 
+// block the syscall by changing it to 3 (close)
+// in the argument we provide -1 (invalid file descriptor)
+// so the syscall returns error code (-1), which happens
+// to be error code for open and mprotect syscalls too
+void block_syscall(size_t pid, user_regs_struct &s) {
+	std::cout << "blocking...\n";
+	s.orig_rax = 3;
+	s.rdi = -1;
+	ptrace(PTRACE_SETREGS, pid, nullptr, &s);
+}
+
 int32_t main(int argc, char** argv) {
 	if(argc < 2) {
 		std::cerr << "usage: ./trace [bin]\n";
@@ -66,23 +77,11 @@ int32_t main(int argc, char** argv) {
 			bool ok = true;
 			while(true) {
 				while(true) {
-					// ptrace(PTRACE_SYSEMU, pid, 0, 0);
 					ptrace(PTRACE_SYSCALL, pid, 0, 0);
 					
 					log_parent("waiting....");
 					int status;
 					waitpid(pid, &status, 0);
-
-
-				//long call = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * ORIG_RAX);
-				//long rdx = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * REG_RDX);
-				//	std::cout << "rax: " << call << '\n';
-				//	std::cout << "rdx: " << rdx << '\n';
-					
-					//if(call == 1 ) // && rdx == 0x6)
-					//	getchar();
-
-
 
 					if (WIFSTOPPED(status) && WSTOPSIG(status) & 0x80) {
 						log_parent("stopped: " + std::to_string(status));
@@ -100,64 +99,58 @@ int32_t main(int argc, char** argv) {
 				// ptrace_syscall_info call;
 				long call = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * ORIG_RAX);
 				long rdx = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * REG_RDX);
+				long rsi = ptrace(PTRACE_PEEKUSER, pid, sizeof(long) * REG_RSI);
 
-
-				if(call == 10 && rdx == 0x6) {
+				// handle 'mprotect' with the options set to EXEC and WRITE at the same time
+				if(call == 10 && ((rdx & 0x6) == 0x6)) {
 					user_regs_struct s;
 					int err = ptrace(PTRACE_GETREGS, pid, nullptr, &s);
-					std::cout << "blocking...\n";
-					// std::cout << err << '\n';
-					// std::cout << s.orig_rax << '\n';
-					s.orig_rax = 3;
-					s.rdi = -1;
-					// s.rsi = 0;
-					// s.rdx = 1;
-					ptrace(PTRACE_SETREGS, pid, nullptr, &s);
+					if(err < 0) {
+						std::cerr << "failed to steal registers!\n";
+						exit(1);
+					}
+					block_syscall(pid, s);
 				}
-				if((call == 257 && rdx == 0x2) || 
-				   (call == 2 && rdx == 0x2)
-				) {// && rdx == 0x6) { 
-					//std::cout << "rax: " << call << '\n';
-					// std::cout << "rdx: " << rdx << '\n';
-					// ptrace(PTRACE_SYSCALL, pid, 0, 0);
+
+				// handle 'open' and 'openat', with the O_RDWR flag
+				if((call == 257 && rdx == 0x2) || (call == 2 && rsi == 0x2)) {
 					user_regs_struct s;
 					int err = ptrace(PTRACE_GETREGS, pid, nullptr, &s);
+					if(err < 0) {
+						std::cerr << "failed to steal registers!\n";
+						exit(1);
+					}
+
 					long ptr = s.rsi;
-					std::cout << "rsi: " << ptr << '\n';
+					// the register containing the filepath is different for open
+					if(call == 2) 
+						ptr = s.rdi;
 					int i=0;
 					std::string path;
 					char last = '$';
 					while(true) {
 						char x = ptrace(PTRACE_PEEKDATA, pid, ptr+i*sizeof(char), 0);
+						// read until null character
 						if(!x)
 							break;
-						// std::cout << x << '\n';
+						// edge case: /bin//////ls 
 						if(last != '/' || x != '/')
 							path.push_back(x);
 						last = x;
 						++i;
 					}
-					
-					std::cout << "path: " << path << '\n';
+
+					// edge case: /bin/ls/
 					if(path.size() && path.back() == '/')
 						path.pop_back();
+
+					log_parent("path: " + path);
+					// check if the requested path is 
 					if(path != "/proc/self/mem")
 						continue;
-					std::cout << "blocking...\n";
-					// std::cout << err << '\n';
-					// std::cout << s.orig_rax << '\n';
-					s.orig_rax = 3;
-					s.rdi = -1;
-					// s.rsi = 0;
-					// s.rdx = 1;
-					ptrace(PTRACE_SETREGS, pid, nullptr, &s);
+					
+					block_syscall(pid, s);
 				}
-				// ptrace(PTRACE_GET_SYSCALL_INFO, pid, 0, &call);
-				// log_parent(std::to_string(call.instruction_pointer));
-				// log_parent(std::to_string(call.entry.nr));
-				// log_parent(std::to_string(call.seccomp.nr));
-				//std::cout << "called: " << call << '\n';
-				// ptrace(PTRACE_CONT, pid);
 			}
 
 			log_parent("down");

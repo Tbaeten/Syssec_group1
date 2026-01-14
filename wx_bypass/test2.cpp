@@ -5,11 +5,7 @@
 // g++ test2.cpp -o test2
 int main() {
 	// this code simulates an attacker that aims to abuse the /proc/self/mem file
-	//printf("hello\n");
-	//printf("%d\n", O_RDWR);
 	int fd = open("/proc/self/mem", O_RDWR);
-	//printf("%d\n", fd);
-	//printf("%d\n", getpid());
 	if (fd < 0) {
 		printf("Failed to open /proc/self/mem ... attacker blocked :) !!!\n");
 	}
@@ -19,6 +15,8 @@ int main() {
 		close(fd);
 	}
 	
+	// should not fail!
+	// make sure that /tmp/test.txt exists and has the right permissions
 	fd = open("/tmp/test.txt", O_RDWR);
 	if (fd < 0) {
 		printf("Failed to open /tmp/test.txt\n");
