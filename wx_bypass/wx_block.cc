@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <iostream>
@@ -10,7 +9,7 @@
 #include <sys/reg.h>
 #include <unistd.h>
 #include <vector>
-#include <fstream>
+#include <sstream>
 
 inline void log_child(const std::string &msg) {
 #ifdef DEBUG
@@ -146,7 +145,18 @@ int32_t main(int argc, char** argv) {
 
 					log_parent("path: " + path);
 					// check if the requested path is 
-					if(path != "/proc/self/mem")
+					// if(path != "/proc/self/mem")
+					// 	continue;
+
+					std::stringstream ss(path);
+					std::string w;
+					std::vector<std::string> path_split;
+					while(std::getline(ss, w, '/'))
+						path_split.push_back(w);
+
+					// notice that it should block all paths in the format of:
+					// /proc/[pid]/mem
+					if(path_split.size() < 4 || path_split[1] != "proc" || path_split[3] != "mem")
 						continue;
 					
 					block_syscall(pid, s);
