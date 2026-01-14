@@ -29,7 +29,7 @@ inline void log_parent(const std::string &msg) {
 // so the syscall returns error code (-1), which happens
 // to be error code for open and mprotect syscalls too
 void block_syscall(size_t pid, user_regs_struct &s) {
-	std::cout << "blocking...\n";
+	std::cout << "[wx_block] blocking...\n";
 	s.orig_rax = 3;
 	s.rdi = -1;
 	ptrace(PTRACE_SETREGS, pid, nullptr, &s);
